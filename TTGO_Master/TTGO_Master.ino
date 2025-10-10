@@ -1,63 +1,22 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <Arduino_JSON.h>
-#include <BluetoothSerial.h>
-#define BUZZER_PIN 21
+#define SERIAL_TX 17
+#define SERIAL_RX 16
 
-// unsigned longs because the time, measured in
-// milliseconds, will quickly become a bigger number than can be stored in an int.
-unsigned long lastTime = 0;
-unsigned long timerDelay = 5000;
-
-const char *ssid = "BELL892";
-const char *password = "1E7C373CF727";
-// const char *ssid = "iPhoneCamila"; // my hotspot
-// const char *password = "Nicolas19";
+const char* ssid = "BELL892";
+const char* password = "1E7C373CF727";
 
 String BASE_URL = "https://iotjukebox.onrender.com";
 String STUDENT_ID = "40239038";
 String DEVICE1_NAME = "iPhoneCamila";
-String DEVICE2_NAME = "Camila_MBP";
-
-// BluetoothSerial SerialBT;
-// static bool btScanSync = true;
 
 struct Song {
-  String name = "undefined";
+  String name;
   int tempo;
   int melody[50];
-  int length = 0;
+  int length;
 };
-
-void play(Song object) {
-  int notes = object.length / 2;
-  int wholenote = (60000 * 4) / object.tempo;
-  int divider = 0, noteDuration = 0;
-
-  // iterate over the notes of the melody.
-  // Remember, the array is twice the number of notes (notes + durations)
-  for (int thisNote = 0; thisNote < notes * 2; thisNote = thisNote + 2) {
-    // calculates the duration of each note
-    divider = object.melody[thisNote + 1];
-    if (divider > 0) {
-      // regular note, just proceed
-      noteDuration = (wholenote) / divider;
-    } else if (divider < 0) {
-      // dotted notes are represented with negative durations!!
-      noteDuration = (wholenote) / abs(divider);
-      noteDuration *= 1.5; // increases the duration in half for dotted notes
-    }
-
-    // we only play the note for 90% of the duration, leaving 10% as a pause
-    tone(BUZZER_PIN, object.melody[thisNote], noteDuration * 0.9);
-
-    // Wait for the specief duration before playing the next note.
-    delay(noteDuration);
-
-    // stop the waveform generation before the next note.
-    noTone(BUZZER_PIN);
-  }
-}
 
 Song httpGET(String endpoint) {
   Song randomSong;
@@ -153,36 +112,55 @@ void postDevice(String student_id, String device, String song_name) {
   http.end(); // Free resources
 }
 
+bool isNanoReady() {
+  Serial2.println("STATUS"); // ask Nano
+  unsigned long start = millis();
+  while (!Serial2.available()) {
+    if (millis() - start > 1000) return false; // timeout
+  }
+  String status = Serial2.readStringUntil('\n');
+  return status == "0"; // 0 = not playing
+}
+
+
+bool sendSongToNano(Song song) {
+  Serial2.println(song.tempo);
+  Serial2.println(song.length);
+  for (int i = 0; i < song.length; i++)
+    Serial2.println(song.melody[i]);
+
+  // Wait for acknowledgment from Nano
+  unsigned long start = millis();
+  while (!Serial2.available()) {
+    if (millis() - start > 1000) return false; // timeout
+  }
+  String ack = Serial2.readStringUntil('\n');
+  return ack == "READY";
+}
+
 void setup() {
-  // put your setup code here, to run once:
   Serial.begin(115200);
-  Serial.println("Hello TTGO ESP32");
-  
-  //************************
-  //     SETTING WIFI
-  //************************
-  // WiFi.begin(ssid, password);
-  // Serial.println("Connecting");
-  // while (WiFi.status() != WL_CONNECTED) {
-  //   delay(500);
-  //   Serial.print(".");
-  // }
+  Serial2.begin(115200, SERIAL_8N1, SERIAL_RX, SERIAL_TX);
 
-  // Serial.println("");
-  // Serial.print("Connected to WiFi network with IP Address: ");
-  // Serial.println(WiFi.localIP());
-  // Serial.println("Timer set to 5 seconds (timerDelay variable), it will take 5 seconds before publishing the first reading.");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
 
-  // Serial.println("GET RANDOM SONG");
-  // httpGET("/song");
-  // Serial.println("POST DEVICE");
-  // postDevice(STUDENT_ID, DEVICE1_NAME, "harrypotter");
-  // Serial.println("GET DEVICE");
-  // Song toPlay = getPreferedSong(STUDENT_ID, DEVICE1_NAME);
-  // play(toPlay);
-  // Serial.println("GET SONG");
-  // getSong("gameofthrones");
+  Serial.println("TTGO connected to WiFi!");
+  Serial.println("POST DEVICE");
+  postDevice(STUDENT_ID, DEVICE1_NAME, "harrypotter");
 }
 
 void loop() {
+  if (isNanoReady()) {
+    Serial.println("Nano is free!");
+    Song toPlay = getPreferedSong(STUDENT_ID, DEVICE1_NAME);
+    if (sendSongToNano(toPlay))
+      Serial.println("Song successfully sent to Nano!");
+    else
+      Serial.println("Failed to send song. Retry next loop.");
+  } else {
+    Serial.println("Nano is busy, waiting...");
+  }
+
+  delay(1000);
 }
